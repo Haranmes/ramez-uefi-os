@@ -1,0 +1,8 @@
+[package]
+name = "ramez_uefi_os"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.21"
+uefi = { version = "0.34.0", features = ["panic_handler", "logger"] }
