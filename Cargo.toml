@@ -6,3 +6,9 @@ edition = "2024"
 [dependencies]
 log = "0.4.21"
 r-efi = "5.2.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
