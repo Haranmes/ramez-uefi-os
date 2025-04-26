@@ -1,18 +1,71 @@
 #![feature(uefi_std)]
 
-use log::info;
-use r_efi::efi::{self, Status};
+// good reference -> uefi.org
+
+use r_efi::efi::{self, Boolean, BootServices, Status};
 use std::os::uefi::{
     //self,
     self,
     env, //ffi::OsStrExt},
 };
 
+// c-code version of ImageHandler
+// typedef
+// EFI_STATUS
+// (EFIAPI *EFI_IMAGE_LOAD) (
+//    IN BOOLEAN                          BootPolicy,
+//    IN EFI_HANDLE                       ParentImageHandle,
+//    IN EFI_DEVICE_PATH_PROTOCOL         *DevicePath   OPTIONAL,
+//    IN VOID                             *SourceBuffer OPTIONAL
+//    IN UINTN                            SourceSize,
+//    OUT EFI_HANDLE                      *ImageHandle
+//    );
+
+// init image_handler
+fn imagehandler(bs: &BootServices, image_handler: efi::Handle) -> efi::Handle {
+    let mut new_image_handle: efi::Handle = core::ptr::null_mut();
+
+    let status = {
+        (bs.load_image)(
+            Boolean::FALSE, // Load image into memory, not into the boot device
+            image_handler,
+            core::ptr::null_mut(), // Device handle (null if we want to load from the default device) -> optional
+            core::ptr::null_mut(),
+            0,
+            &mut new_image_handle as &mut _, //OUT parameter: gets the new image handle)
+        )
+    };
+
+    if status != Status::SUCCESS {
+        panic!("Couldn't load image handle");
+    }
+
+    new_image_handle
+}
+
 pub fn main() -> Result<(), Status> {
     println!("Starting Rust Application...");
 
     // Use System Table Directly
     let st = env::system_table().as_ptr() as *mut efi::SystemTable;
+    let boot_services = unsafe { &*(*st).boot_services };
+    let con_in = unsafe { &mut (*(*st).con_in) };
+
+    println!("Press any key to proceed...");
+
+    let mut x: usize = 0;
+    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
+    // core::ffi::c_void is an obeque pointer to image
+    let hn = env::image_handle().as_ptr() as *mut core::ffi::c_void;
+
+    let new_hn = imagehandler(&boot_services, hn);
+
+    println!("System Table: {:#018x}", core::ptr::addr_of!(*st) as usize);
+    println!("Image Handle: {:#018x}", new_hn as usize);
+    // load image via boot_services
+
+    // Use ImageHandler Directly
+
     // let mut s: Vec<u16> = OsString::from("Press any key to proceed...\n")
     //     .encode_wide()
     //     .collect();
@@ -28,9 +81,6 @@ pub fn main() -> Result<(), Status> {
     // };
 
     // Wait for key input, by waiting on the `wait_for_key` event hook.
-    let boot_services = unsafe { &*(*st).boot_services };
-
-    let con_in = unsafe { &mut (*(*st).con_in) };
 
     // mapping memory
 
@@ -64,10 +114,6 @@ pub fn main() -> Result<(), Status> {
 
     let buffer_ptr = buffer as *mut u8;
 
-    println!("Press any key to proceed...");
-
-    let mut x: usize = 0;
-    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
     // assert!(!r.is_error())
     Ok(()) // Status can hold 0x0000000000000000 to 0xFFFFFFFFFFFFFFFF
 }
