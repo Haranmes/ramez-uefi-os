@@ -1,8 +1,8 @@
 #![feature(uefi_std)]
 
 // good reference -> uefi.org
-
-use r_efi::efi::{self, Boolean, BootServices, Status};
+use core::ffi::c_void;
+use r_efi::efi::{self, Boolean, BootServices, ImageEntryPoint, Status};
 use std::os::uefi::{
     //self,
     self,
@@ -21,14 +21,14 @@ use std::os::uefi::{
 //    OUT EFI_HANDLE                      *ImageHandle
 //    );
 
-// init image_handler
-fn imagehandler(bs: &BootServices, image_handler: efi::Handle) -> efi::Handle {
+// load a costum image
+fn imagehandler(bs: &BootServices, image_handler: &efi::Handle) -> efi::Handle {
     let mut new_image_handle: efi::Handle = core::ptr::null_mut();
 
     let status = {
         (bs.load_image)(
             Boolean::FALSE, // Load image into memory, not into the boot device
-            image_handler,
+            *image_handler,
             core::ptr::null_mut(), // Device handle (null if we want to load from the default device) -> optional
             core::ptr::null_mut(),
             0,
@@ -37,7 +37,7 @@ fn imagehandler(bs: &BootServices, image_handler: efi::Handle) -> efi::Handle {
     };
 
     if status != Status::SUCCESS {
-        panic!("Couldn't load image handle");
+        println!("Error loading image: {:?}", status);
     }
 
     new_image_handle
@@ -53,15 +53,19 @@ pub fn main() -> Result<(), Status> {
 
     println!("Press any key to proceed...");
 
-    let mut x: usize = 0;
-    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
     // core::ffi::c_void is an obeque pointer to image
-    let hn = env::image_handle().as_ptr() as *mut core::ffi::c_void;
+    let hn = env::image_handle();
 
-    let new_hn = imagehandler(&boot_services, hn);
+    // this is already the needed image_handle pointer
+    let hn_pointer = hn.as_ptr() as *mut core::ffi::c_void;
 
     println!("System Table: {:#018x}", core::ptr::addr_of!(*st) as usize);
-    println!("Image Handle: {:#018x}", new_hn as usize);
+
+    //only needed when loading a costum kernel image
+    // let new_hn = imagehandler(&boot_services, &hn_pointer);
+
+    println!("Image Handle: {:#018x}", hn_pointer as usize);
+
     // load image via boot_services
 
     // Use ImageHandler Directly
@@ -108,8 +112,11 @@ pub fn main() -> Result<(), Status> {
     let mut buffer: *mut core::ffi::c_void = core::ptr::null_mut();
     let status = (boot_services.allocate_pool)(efi::LOADER_DATA, memory_map_size, &mut buffer);
 
+    let mut x: usize = 0;
+    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
+
     if status != efi::Status::SUCCESS {
-        panic!("Failed to allocate memory map buffer: {:?}", status);
+        println!("Failed to allocate memory map buffer: {:?}", status);
     }
 
     let buffer_ptr = buffer as *mut u8;
