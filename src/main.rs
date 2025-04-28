@@ -1,6 +1,12 @@
 #![feature(uefi_std)]
 
 // good reference -> uefi.org
+// mods
+mod image_handler;
+mod makros;
+
+use image_handler::imagehandler;
+use makros::uefi_println;
 
 use r_efi::efi::{
     self, Boolean, BootServices, MemoryDescriptor, Status, SystemTable,
@@ -29,63 +35,31 @@ use std::{
 //    );
 
 // load a costum image like a Kernel for instance
-fn imagehandler(bs: &BootServices, image_handler: &efi::Handle) -> efi::Handle {
-    let mut new_image_handle: efi::Handle = core::ptr::null_mut();
-
-    let status = {
-        (bs.load_image)(
-            Boolean::FALSE, // Load image into memory, not into the boot device
-            *image_handler,
-            core::ptr::null_mut(), // Device handle (null if we want to load from the default device) -> optional
-            core::ptr::null_mut(),
-            0,
-            &mut new_image_handle as &mut _, //OUT parameter: gets the new image handle)
-        )
-    };
-
-    if status != Status::SUCCESS {
-        println!("Error loading image: {:?}\r", status);
-    }
-
-    new_image_handle
-}
-
-// TODO: Fix log message
-fn log(message: Vec<u16>, con_out: &mut r_efi::protocols::simple_text_output::Protocol) {
-    let r = unsafe {
-        let con_out: *mut simple_text_output::Protocol = con_out;
-        let output_string: extern "efiapi" fn(
-            _: *mut simple_text_output::Protocol,
-            *mut u16,
-        ) -> efi::Status = (*con_out).output_string;
-        output_string(con_out, message.as_ptr() as *mut efi::Char16)
-    };
-}
 
 pub fn main() -> Result<(), Status> {
-    println!("Starting Rust Application...\r");
-
     // Use System Table Directly
     let st = env::system_table().as_ptr() as *mut efi::SystemTable;
     let boot_services = unsafe { &*(*st).boot_services };
     let con_in = unsafe { &mut (*(*st).con_in) };
     let con_out = unsafe { &mut (*(*st).con_out) };
 
+    uefi_println!(con_out, "Starting Rust Application..");
     // core::ffi::c_void is an obeque pointer to image
     let hn = env::image_handle();
 
     // this is already the needed image_handle pointer
     let hn_pointer = hn.as_ptr() as *mut core::ffi::c_void;
 
-    println!(
-        "System Table: {:#018x}\r",
+    uefi_println!(
+        con_out,
+        "System Table: {:#018x}",
         core::ptr::addr_of!(*st) as usize
     );
 
     //only needed when loading a costum kernel image
     // let new_hn = imagehandler(&boot_services, &hn_pointer);
 
-    println!("Image Handle: {:#018x}\r", hn_pointer as usize);
+    uefi_println!(con_out, "Image Handle: {:#018x}", hn_pointer as usize);
 
     // load image via boot_services
 
@@ -122,13 +96,17 @@ pub fn main() -> Result<(), Status> {
         &mut descriptor_version,
     );
 
-    println!("Required memory map size: {} bytes\r", memory_map_size);
-    println!("Descriptor size: {} bytes\r", descriptor_size);
-    println!("Descriptor version: {}\r", descriptor_version);
+    uefi_println!(
+        con_out,
+        "Required memory map size: {} bytes",
+        memory_map_size
+    );
+    uefi_println!(con_out, "Descriptor size: {} bytes", descriptor_size);
+    uefi_println!(con_out, "Descriptor version: {}", descriptor_version);
     // println!("get_memory_map status: {:?}", status);
 
     // to do: logging
-    println!("Memory map: {}\r\n", memory_map_size);
+    println!("Memory map: {}\r", memory_map_size);
 
     let mut buffer: *mut core::ffi::c_void = core::ptr::null_mut();
 
@@ -136,7 +114,11 @@ pub fn main() -> Result<(), Status> {
     let status = (boot_services.allocate_pool)(efi::LOADER_DATA, memory_map_size, &mut buffer);
 
     if status != efi::Status::SUCCESS {
-        println!("Failed to allocate memory map buffer: {:?}\r", status);
+        uefi_println!(
+            con_out,
+            "Failed to allocate memory map buffer: {:?}",
+            status
+        );
     }
 
     // loading needed buffer into Memory
@@ -151,19 +133,25 @@ pub fn main() -> Result<(), Status> {
     );
 
     if status != efi::Status::SUCCESS {
-        println!("Failed to allocate memory into memory: {:?}\r", status);
+        uefi_println!(
+            con_out,
+            "Failed to allocate memory into memory: {:?}",
+            status
+        );
     }
 
-    let mut ptr = buffer as *const u8;
-    let end = unsafe { ptr.add(*&memory_map_size) };
-    let desc_size = descriptor_size as usize;
+    let ptr = buffer as *const u8;
 
     // cast to a descriptor
     let desc = unsafe { &*(ptr as *const MemoryDescriptor) };
 
-    println!(
-        "Type: {:?}, PhysStart: {:#x}, Pages: {}, Attr: {:#x}\r",
-        desc.r#type, desc.physical_start, desc.number_of_pages, desc.attribute,
+    uefi_println!(
+        con_out,
+        "Type: {:?}, PhysStart: {:#x}, Pages: {}, Attr: {:#x}",
+        desc.r#type,
+        desc.physical_start,
+        desc.number_of_pages,
+        desc.attribute,
     );
 
     // // advance by one descriptor
@@ -174,7 +162,7 @@ pub fn main() -> Result<(), Status> {
         .collect();
     message.push(0);
 
-    log(message, con_out);
+    // uefi_println!(message, con_out);
 
     let mut x: usize = 0;
     (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
