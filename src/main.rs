@@ -2,9 +2,12 @@
 
 // good reference -> uefi.org
 // mods
+mod cfg_table;
+mod cfg_table_guid;
 mod image_handler;
 mod makros;
 
+use cfg_table::CfgTableType;
 use image_handler::imagehandler;
 use makros::uefi_println;
 
@@ -42,6 +45,8 @@ pub fn main() -> Result<(), Status> {
     let boot_services = unsafe { &*(*st).boot_services };
     let con_in = unsafe { &mut (*(*st).con_in) };
     let con_out = unsafe { &mut (*(*st).con_out) };
+    let conf_table_ptr = unsafe { (*st).configuration_table };
+    let num_entries = unsafe { (*st).number_of_table_entries };
 
     uefi_println!(con_out, "Starting Rust Application..");
     // core::ffi::c_void is an obeque pointer to image
@@ -162,6 +167,18 @@ pub fn main() -> Result<(), Status> {
         .collect();
     message.push(0);
 
+    // Iterate across the Config Tables and enumerate them
+    for i in 0..num_entries {
+        let cfg = unsafe { *conf_table_ptr.add(i) };
+        let cfg_table_name: CfgTableType = cfg.vendor_guid.into();
+
+        uefi_println!(
+            con_out,
+            "Ptr: {:#018x}, GUID: {}",
+            cfg.vendor_table as usize,
+            cfg_table_name
+        );
+    }
     // uefi_println!(message, con_out);
 
     let mut x: usize = 0;

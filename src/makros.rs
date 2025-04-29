@@ -1,4 +1,5 @@
 // Helper struct
+pub use uguid::Guid;
 
 macro_rules! uefi_println {
     ($con_out:expr, $($arg:tt)*) => {{
@@ -40,10 +41,38 @@ macro_rules! uefi_println {
             buf[cursor] = 0;
         }
 
-        unsafe {
-            ((*$con_out).output_string)($con_out, buf.as_mut_ptr());
-        }
+
+        ((*$con_out).output_string)($con_out, buf.as_mut_ptr());
     }};
 }
 
 pub(crate) use uefi_println;
+
+//---------------------------
+
+#[macro_export]
+macro_rules! guid {
+    ($l:expr, $m:expr, $h:expr, $b1:expr, $b2:expr, $($rest:expr),*) => {
+        Guid {
+            time_low: [
+                ($l >>  0) as u8,
+                ($l >>  8) as u8,
+                ($l >> 16) as u8,
+                ($l >> 24) as u8,
+            ],
+            time_mid: [
+                ($m >> 0) as u8,
+                ($m >> 8) as u8,
+            ],
+            time_hi_and_version: [
+                ($h >> 0) as u8,
+                ($h >> 8) as u8,
+            ],
+            clk_seq_hi_res: $b1,
+            clk_seq_low: $b2,
+            node: [ $($rest),* ],
+        }
+    };
+}
+
+pub(crate) use guid;

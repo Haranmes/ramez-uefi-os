@@ -20,4 +20,11 @@ version = "0.1.0"
 dependencies = [
  "log",
  "r-efi",
+ "uguid",
 ]
+
+[[package]]
+name = "uguid"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c8352f8c05e47892e7eaf13b34abd76a7f4aeaf817b716e88789381927f199c"

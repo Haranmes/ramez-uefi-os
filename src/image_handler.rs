@@ -1,4 +1,5 @@
 use r_efi::efi::{self, Boolean, BootServices, Status};
+
 pub fn imagehandler(bs: &BootServices, image_handler: &efi::Handle) -> efi::Handle {
     let mut new_image_handle: efi::Handle = core::ptr::null_mut();
 
