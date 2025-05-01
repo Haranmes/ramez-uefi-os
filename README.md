@@ -1,6 +1,4 @@
 # ramez-uefi-os
-This is my first (serious) Project using Rust
----
 
 ## The Bootloader
 - Created with `r_uefi` and the rust nightly feature `uefi_std`
