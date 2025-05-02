@@ -1,0 +1,1 @@
+{"rustc":3990928699527220428,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[9689903380558560274,"build_script_build",false,7507993958855909247]],"local":[{"RerunIfChanged":{"output":"x86_64-unknown-uefi/debug/build/serde-aa07be6737ecde3f/output","paths":["build.rs"]}}],"rustflags":[],"config":0,"compile_kind":0}

@@ -2,5 +2,14 @@
 name = "kernel"
 version = "0.1.0"
 edition = "2024"
+resolver = "3"
 
 [dependencies]
+
+
+[features]
+default = []
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
