@@ -1,0 +1,9 @@
+[build]
+build-stage = 1
+target = "x86_64-unknown-uefi"
+
+[rust]
+lld = true
+
+[unstable]
+build-std = ["core", "compiler_builtins"]

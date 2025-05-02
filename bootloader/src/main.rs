@@ -19,7 +19,6 @@ use std::{
     ffi::OsString,
     os::uefi::{
         //self,
-        self,
         env,
         ffi::OsStrExt, //ffi::OsStrExt},
     },
