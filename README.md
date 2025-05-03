@@ -13,3 +13,5 @@
 - Get missing GUIDs
 
 ## The Kernel (WIP)
+### To-Do:
+- Correct Elf file parsing
