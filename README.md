@@ -9,4 +9,7 @@
 - Boot service interaction with `system_table`
 - Image handle for future kernel
 
+### To-Do:
+- Get missing GUIDs
+
 ## The Kernel (WIP)
