@@ -1,34 +1,43 @@
 use r_efi::efi::{self, Boolean, BootServices, Status};
 use elf_rs::*;
-use  r_efi::protocols::simple_text_output::Protocol;
 
 use std::io::Read;
 use std::fs::File;
 use std::env;
+use r_efi::protocols::simple_text_input::Protocol;
+use elf_rs::*;
 
-use crate::uefi_println;
+pub fn read_elf_and_jump( bs : &BootServices,hn_pointer : *mut core::ffi::c_void, map_key : usize, con_in : &mut Protocol) {
 
+    let mut x: usize = 0;
+    (bs.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
 
-pub fn read_elf_and_jump(filename: &String, bs : &BootServices) {
+    let elf_bytes = include_bytes!("../qemu-testing/esp/kernel/kernel.elf");
+    let elf = elf_rs::Elf::from_bytes(elf_bytes).unwrap();
+    let elf64 = match elf {
+        Elf::Elf64(elf) => elf,
+        _ => panic!("got Elf32, expected Elf64"),
+    };
 
-    let mut elf_file = File::open(filename).expect("open file failed");
-    let mut elf_buf = Vec::<u8>::new();
-    elf_file.read_to_end(&mut elf_buf).expect("read file failed");
+    println!("{:?} header: {:?}", elf64, elf64.elf_header());
 
-    let elf = Elf::from_bytes(&elf_buf).expect("load elf file failed");
-
-    println!("{:?} header: {:?}", elf, elf.elf_header());
-
-    elf.program_header_iter()
+    elf64.program_header_iter()
     .filter(|ph| ph.ph_type() == ProgramType::LOAD)
             .for_each(|ph| {
                 map_memory(ph, bs);
             });
     
+    println!("Press any key to proceed...\r");
 
-    
+    let mut x: usize = 0;
+    (bs.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
+
+    let status = (bs.exit_boot_services)(hn_pointer, map_key);
+    if status != Status::SUCCESS {
+        panic!("bootservice exit was not successfull!");
+    }
     // Jump to kernel entry point
-    let entry = elf.elf_header().entry_point();
+    let entry = elf64.elf_header().entry_point();
     let entry_fn: extern "sysv64" fn() -> ! = unsafe { core::mem::transmute(entry) };
 
     entry_fn();

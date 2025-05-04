@@ -12,7 +12,7 @@ use load_kernel::read_elf_and_jump;
 use makros::uefi_println;
 use elf_rs::*;
 use r_efi::efi::{
-    self, MemoryDescriptor, Status
+    self, MemoryDescriptor, Status, BootServices
 };
 use std::{
     fs::File,
@@ -104,6 +104,8 @@ pub fn main() -> () {
     let mut buffer: *mut core::ffi::c_void = core::ptr::null_mut();
 
     // allocates needed memory from buffer
+    
+    // add mem buffer
     memory_map_size += descriptor_size * 8;
 
     let status = (boot_services.allocate_pool)(efi::LOADER_DATA, memory_map_size, &mut buffer);
@@ -189,10 +191,6 @@ for i in 0..num_entries {
     
     uefi_println!(con_out, "Press any key to proceed...");
 
-    let mut x: usize = 0;
-    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
-
-    
     //let buffer_ptr = buffer as *mut u8;
 
     
@@ -202,14 +200,88 @@ for i in 0..num_entries {
         IN EFI_HANDLE                       ImageHandle,
         IN UINTN                            MapKey
     ); */
-    let file = String::from("../qemu-testing/esp/kernel/kernel.elf");
+    /* read_elf_and_jump(boot_services, hn_pointer,map_key, con_in); */
+    
+    let mut x: usize = 0;
+    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
 
-    let status = (boot_services.exit_boot_services)(hn_pointer, map_key);
-    if status != Status::SUCCESS {
-        println!("bootservice exit was not successfull!");
-    }
-    read_elf_and_jump(&file, boot_services);
+    let elf_bytes = include_bytes!("../qemu-testing/esp/kernel/kernel.elf");
+    let elf = elf_rs::Elf::from_bytes(elf_bytes).unwrap();
+    let elf64 = match elf {
+        Elf::Elf64(elf) => elf,
+        _ => panic!("got Elf32, expected Elf64"),
+    };
+
+    let mut x: usize = 0;
+    (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
+
+    println!("{:?} header: {:?}\r", elf64, elf64.elf_header());
+
+    elf64.program_header_iter()
+    .for_each(|ph| {
+        println!("Program Header: type = {:?}, vaddr = {:x}, offset = {:x}\r", ph.ph_type(), ph.vaddr(), ph.offset());
+    });
+
+    //this code snippet causes the error
+    elf64.program_header_iter()
+    .filter(|ph| ph.ph_type() == ProgramType::LOAD)
+            .for_each(|ph| {
+                println!("loading {:?}\r", ph);
+                map_memory(ph, boot_services, elf_bytes);
+            });
     
 
+    
 
+    println!("Press any key to proceed to map memory...\r");
+    let status = (boot_services.exit_boot_services)(hn_pointer, map_key);
+    if status != Status::SUCCESS {
+        panic!("bootservice exit was not successfull!\r");
+    }
+    // Jump to kernel entry point
+    let entry = elf64.elf_header().entry_point();
+    let entry_fn: extern "sysv64" fn() -> ! = unsafe { core::mem::transmute(entry) };
+
+    entry_fn();
+}
+
+
+
+
+/// Blindly copies the LOAD segment content at its desired address in physical
+/// address space. The loader assumes that the addresses to not clash with the
+/// loader (or anything else).s
+fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices, elf_bytes : &[u8; 4042312]) {
+    let offset = ph.offset() as usize;
+    let filesz = ph.filesz() as usize;
+
+    let dest_ptr = ph.vaddr() as *mut u8;
+    println!("Mapping LOAD segment {ph:#?}\r");
+
+    let pages = (ph.memsz() + 0xFFF) / 0x1000;
+
+    
+    let mut vaddr = ph.vaddr() as u64;
+    let status = (bs.allocate_pages)(
+        efi::ALLOCATE_ADDRESS,
+        efi::LOADER_DATA,
+        pages as usize,
+        &mut vaddr,
+    );
+
+    if status != efi::Status::SUCCESS {
+        panic!("Failed to allocate pages at {:#x}: {:?}\r", vaddr, status);
+    }
+
+    let dest_ptr = vaddr as *mut u8;
+    let content = ph.content().expect("Should have content");
+
+    unsafe {
+        core::ptr::copy(content.as_ptr(), dest_ptr, content.len());
+
+        // Zero .bss memory
+        for i in 0..(ph.memsz() - ph.filesz()) {
+            core::ptr::write(dest_ptr.add(ph.filesz() as usize + i as usize), 0);
+        }
+    }
 }
