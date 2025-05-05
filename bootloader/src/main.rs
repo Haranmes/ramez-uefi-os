@@ -15,14 +15,13 @@ use r_efi::efi::{
     self, MemoryDescriptor, Status, BootServices
 };
 use std::{
-    fs::File,
-    ffi::OsString,
-    os::uefi::{
+    ffi::OsString, fs::File, os::{raw::c_void, uefi::{
         //self,
         env,
         ffi::OsStrExt, //ffi::OsStrExt},
-    },
+    }}, ptr::read_unaligned
 };
+
 
 
 
@@ -202,11 +201,22 @@ for i in 0..num_entries {
     ); */
     /* read_elf_and_jump(boot_services, hn_pointer,map_key, con_in); */
     
+    struct AlignedTo<Align, Bytes: ?Sized> {
+        _align: [Align; 0],
+        bytes: Bytes, 
+    }
+
+    static ALIGNED: &'static AlignedTo<f32, [u8]> = &AlignedTo {
+        _align: [],
+        bytes: *include_bytes!("../qemu-testing/esp/kernel/kernel.elf"),
+    };
+
     let mut x: usize = 0;
     (boot_services.wait_for_event)(1, &mut con_in.wait_for_key, &mut x);
 
-    let elf_bytes = include_bytes!("../qemu-testing/esp/kernel/kernel.elf");
-    let elf = elf_rs::Elf::from_bytes(elf_bytes).unwrap();
+    static ALIGNED_BYTES: &'static [u8] = &ALIGNED.bytes;
+
+    let elf = elf_rs::Elf::from_bytes(ALIGNED_BYTES).unwrap();
     let elf64 = match elf {
         Elf::Elf64(elf) => elf,
         _ => panic!("got Elf32, expected Elf64"),
@@ -217,21 +227,15 @@ for i in 0..num_entries {
 
     println!("{:?} header: {:?}\r", elf64, elf64.elf_header());
 
-    elf64.program_header_iter()
-    .for_each(|ph| {
-        println!("Program Header: type = {:?}, vaddr = {:x}, offset = {:x}\r", ph.ph_type(), ph.vaddr(), ph.offset());
-    });
-
-    //this code snippet causes the error
+    
     elf64.program_header_iter()
     .filter(|ph| ph.ph_type() == ProgramType::LOAD)
             .for_each(|ph| {
                 println!("loading {:?}\r", ph);
-                map_memory(ph, boot_services, elf_bytes);
+                map_memory(ph, boot_services, );
             });
     
 
-    
 
     println!("Press any key to proceed to map memory...\r");
     let status = (boot_services.exit_boot_services)(hn_pointer, map_key);
@@ -250,38 +254,76 @@ for i in 0..num_entries {
 
 /// Blindly copies the LOAD segment content at its desired address in physical
 /// address space. The loader assumes that the addresses to not clash with the
-/// loader (or anything else).s
-fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices, elf_bytes : &[u8; 4042312]) {
-    let offset = ph.offset() as usize;
-    let filesz = ph.filesz() as usize;
+/// loader (or anything else).
+fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices, buffer : *mut core::ffi::c_void) {
+    println!("Mapping LOAD segment {ph:#?}");
 
-    let dest_ptr = ph.vaddr() as *mut u8;
-    println!("Mapping LOAD segment {ph:#?}\r");
+    let mem_size = ph.memsz() as usize;
+    let file_size = ph.filesz() as usize;
+    let vaddr = ph.vaddr() as usize;
 
-    let pages = (ph.memsz() + 0xFFF) / 0x1000;
+    let page_size = 0x1000;
+    let page_offset = vaddr % page_size;
+    let aligned_vaddr = vaddr - page_offset;
 
+    // offset + the total size in memory
+    let alloc_size = page_offset + mem_size;
+    let pages = (alloc_size + page_size - 1) / page_size;
+
+    if !is_range_free(memory_map, aligned_vaddr, alloc_size) {
+        panic!(
+            "Requested mapping at {:#x} ({} bytes) overlaps existing memory!",
+            aligned_vaddr, alloc_size
+        );
+    }
     
-    let mut vaddr = ph.vaddr() as u64;
+    let mut alloc_addr = aligned_vaddr as u64;
     let status = (bs.allocate_pages)(
         efi::ALLOCATE_ADDRESS,
         efi::LOADER_DATA,
-        pages as usize,
-        &mut vaddr,
+        pages,
+        &mut alloc_addr,
+    );
+    println!(
+        "Trying to allocate {} pages at {:#x} → Status: {:?}",
+        pages, alloc_addr, status
     );
 
+    
     if status != efi::Status::SUCCESS {
-        panic!("Failed to allocate pages at {:#x}: {:?}\r", vaddr, status);
+        panic!("Failed to allocate pages at {:#x}: {:?}\r", alloc_addr, status);
     }
 
-    let dest_ptr = vaddr as *mut u8;
     let content = ph.content().expect("Should have content");
 
-    unsafe {
-        core::ptr::copy(content.as_ptr(), dest_ptr, content.len());
+    let dest_ptr = (alloc_addr as usize + page_offset) as *mut u8;
 
-        // Zero .bss memory
-        for i in 0..(ph.memsz() - ph.filesz()) {
-            core::ptr::write(dest_ptr.add(ph.filesz() as usize + i as usize), 0);
+    println!(
+        "Copying segment content: dest = {:#x}, len = {}",
+        dest_ptr as usize, file_size
+    );
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(content.as_ptr(), dest_ptr, file_size);
+
+        // Zero remaining .bss area
+        core::ptr::write_bytes(dest_ptr.add(file_size), 0, mem_size - file_size);
+    }
+
+    println!(
+        "Segment mapped at aligned {:#x}, total pages: {}",
+        alloc_addr, pages
+    );
+}
+
+fn is_range_free(memory_map: &[MemoryDescriptor], start: usize, size: usize) -> bool {
+    let end = start + size;
+    for desc in memory_map {
+        let desc_start = desc.physical_start as usize;
+        let desc_end = desc_start + (desc.number_of_pages as usize * 0x1000);
+        if start < desc_end && end > desc_start {
+            return false; // Overlaps
         }
     }
+    true
 }
