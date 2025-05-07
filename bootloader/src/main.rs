@@ -228,12 +228,106 @@ for i in 0..num_entries {
     println!("{:?} header: {:?}\r", elf64, elf64.elf_header());
 
     
-    elf64.program_header_iter()
-    .filter(|ph| ph.ph_type() == ProgramType::LOAD)
-            .for_each(|ph| {
-                println!("loading {:?}\r", ph);
-                map_memory(ph, boot_services, );
-            });
+    for (i, ph) in elf64.program_header_iter().enumerate() {
+        // Skip non-loadable segments
+        if ph.ph_type() != ProgramType::LOAD {
+            println!("Skipping non-loadable segment {}", i);
+            continue;
+        }
+    
+        let mem_size = ph.memsz();
+        let file_size = ph.filesz();
+        let virt_addr = ph.vaddr();
+        let page_size = 0x1000; // 4KB pages
+    
+        if mem_size == 0 {
+            println!("Skipping zero-sized segment {}", i);
+            continue;
+        }
+    
+        // Align virtual address to the page boundary
+        let mut aligned_vaddr = virt_addr & !(page_size - 1);
+        let page_offset = virt_addr - aligned_vaddr;
+        let end = (virt_addr + mem_size + page_size + page_offset - 1) & !(page_size - 1);
+        let pages = ((end - aligned_vaddr) / page_size) as usize;
+    
+        // Logging for debugging
+        uefi_println!(
+            con_out,
+            "Segment {}: type={:?}, virt={:#x}, aligned={:#x}",
+            i,
+            ph.ph_type(),
+            virt_addr,
+            aligned_vaddr
+        );
+        uefi_println!(
+            con_out,
+            "         memsz={}, filesz={}, pages={}",
+            mem_size,
+            file_size,
+            pages
+        );
+    
+// Will hold the allocated address
+    
+        uefi_println!(con_out, "About to allocate segment {}", i);
+    
+        // Memory allocation (position-independent loading)
+        let status = (boot_services.allocate_pages)(
+            efi::ALLOCATE_ADDRESS,
+            efi::LOADER_DATA,
+            pages,
+            &mut aligned_vaddr,
+        );
+
+    
+        match status {
+            efi::Status::SUCCESS => {
+                uefi_println!(con_out, " -> OK at address {:#x}", aligned_vaddr);
+            }
+            _ => {
+                uefi_println!(con_out, " -> FAILED: {:?}", status);
+                return;
+            }
+        }
+    
+        uefi_println!(con_out, "Segment {} loaded successfully.", i);
+        
+
+        let dest_ptr = aligned_vaddr as *mut u8; // Das ist die Startadresse
+        let content = ph.content().expect("Should have content");
+        let file_size = ph.filesz() as usize;
+        let mem_size = ph.memsz() as usize;
+        let bss_size = mem_size - file_size;
+
+        println!("Writing to allocated address: {:#x}\r", dest_ptr as usize);
+
+        unsafe {
+            // Dateiinhalt in den zugewiesenen Speicher kopieren
+            core::ptr::copy_nonoverlapping(content.as_ptr(), dest_ptr, file_size);
+
+            println!("Copied to allocated address: {:#x}\r", dest_ptr as usize);
+
+            // .bss nullen direkt nach file_size
+            let bss_ptr = dest_ptr.add(file_size);
+            if bss_size > 0 {
+                println!("Zeroing .bss memory at {:#x}, size {}", bss_ptr as usize, bss_size);
+                core::ptr::write_bytes(bss_ptr, 0, bss_size);
+                /* core::ptr::write(bss_ptr, 0); */
+            }
+        }
+
+        println!("Successfully written to allocated address: {:#x}\r", dest_ptr as usize);
+
+  
+
+    
+    
+        uefi_println!(con_out, "Segment {} processed.", i);
+    }
+    
+    
+    
     
 
 
@@ -252,30 +346,25 @@ for i in 0..num_entries {
 
 
 
-/// Blindly copies the LOAD segment content at its desired address in physical
+/* /// Blindly copies the LOAD segment content at its desired address in physical
 /// address space. The loader assumes that the addresses to not clash with the
 /// loader (or anything else).
-fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices, buffer : *mut core::ffi::c_void) {
+fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices) {
     println!("Mapping LOAD segment {ph:#?}");
 
     let mem_size = ph.memsz() as usize;
     let file_size = ph.filesz() as usize;
     let vaddr = ph.vaddr() as usize;
 
-    let page_size = 0x1000;
+    let page_size = 0x1000; //4069 Bytes defined as one Page
     let page_offset = vaddr % page_size;
-    let aligned_vaddr = vaddr - page_offset;
+    
+    let aligned_vaddr = vaddr & !(page_size - 1);
+    
 
     // offset + the total size in memory
     let alloc_size = page_offset + mem_size;
     let pages = (alloc_size + page_size - 1) / page_size;
-
-    if !is_range_free(memory_map, aligned_vaddr, alloc_size) {
-        panic!(
-            "Requested mapping at {:#x} ({} bytes) overlaps existing memory!",
-            aligned_vaddr, alloc_size
-        );
-    }
     
     let mut alloc_addr = aligned_vaddr as u64;
     let status = (bs.allocate_pages)(
@@ -293,6 +382,8 @@ fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices, buffer : *mut core::ffi
     if status != efi::Status::SUCCESS {
         panic!("Failed to allocate pages at {:#x}: {:?}\r", alloc_addr, status);
     }
+
+    println!("Segment offset: {}, file size: {}", ph.offset(), ph.filesz());
 
     let content = ph.content().expect("Should have content");
 
@@ -314,16 +405,4 @@ fn map_memory(ph: ProgramHeaderEntry, bs: &BootServices, buffer : *mut core::ffi
         "Segment mapped at aligned {:#x}, total pages: {}",
         alloc_addr, pages
     );
-}
-
-fn is_range_free(memory_map: &[MemoryDescriptor], start: usize, size: usize) -> bool {
-    let end = start + size;
-    for desc in memory_map {
-        let desc_start = desc.physical_start as usize;
-        let desc_end = desc_start + (desc.number_of_pages as usize * 0x1000);
-        if start < desc_end && end > desc_start {
-            return false; // Overlaps
-        }
-    }
-    true
-}
+} */
