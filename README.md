@@ -11,7 +11,8 @@
 
 ### To-Do:
 - Get missing GUIDs
+- ~`elf64.program_header_iter()` needs to be fixed -> Doesn't yield data~
+- `map_memory` doesnt work on the third segment
 
 ## The Kernel (WIP)
-### To-Do:
-- Correct Elf file parsing
+
