@@ -93,6 +93,7 @@ pub fn main() -> () {
         memory_map_size
     );
 
+    uefi_println!(con_out, "memory map key: {}", map_key);
     uefi_println!(con_out, "Descriptor size: {} bytes", descriptor_size);
     uefi_println!(con_out, "Descriptor version: {}", descriptor_version);
     // println!("get_memory_map status: {:?}", status);
@@ -227,7 +228,7 @@ for i in 0..num_entries {
 
     println!("{:?} header: {:?}\r", elf64, elf64.elf_header());
 
-    
+    let mut segment_mappings = Vec::new();
     for (i, ph) in elf64.program_header_iter().enumerate() {
         // Skip non-loadable segments
         if ph.ph_type() != ProgramType::LOAD {
@@ -246,7 +247,7 @@ for i in 0..num_entries {
         }
     
         // Align virtual address to the page boundary
-        let mut aligned_vaddr = virt_addr & !(page_size - 1);
+        let aligned_vaddr = virt_addr & !(page_size - 1);
         let page_offset = virt_addr - aligned_vaddr;
         let end = (virt_addr + mem_size + page_size + page_offset - 1) & !(page_size - 1);
         let pages = ((end - aligned_vaddr) / page_size) as usize;
@@ -268,22 +269,25 @@ for i in 0..num_entries {
             pages
         );
     
-// Will hold the allocated address
-    
+        // Will hold the allocated address & let uefi choose where
+        let mut allocated_phys_addr: u64 = 0;
+
         uefi_println!(con_out, "About to allocate segment {}", i);
     
-        // Memory allocation (position-independent loading)
+        // Virtual Memory allocation
         let status = (boot_services.allocate_pages)(
-            efi::ALLOCATE_ADDRESS,
+            efi::ALLOCATE_ANY_PAGES,
             efi::LOADER_DATA,
             pages,
-            &mut aligned_vaddr,
+            &mut allocated_phys_addr,
         );
 
+        // Map virtual address (p_vaddr) → allocated physical address
+        segment_mappings.push((virt_addr, allocated_phys_addr, pages * page_size as usize));
     
         match status {
             efi::Status::SUCCESS => {
-                uefi_println!(con_out, " -> OK at address {:#x}", aligned_vaddr);
+                uefi_println!(con_out, " -> OK at address {:#x}", allocated_phys_addr);
             }
             _ => {
                 uefi_println!(con_out, " -> FAILED: {:?}", status);
@@ -293,16 +297,29 @@ for i in 0..num_entries {
     
         uefi_println!(con_out, "Segment {} loaded successfully.", i);
         
+       
 
-        let dest_ptr = aligned_vaddr as *mut u8; // Das ist die Startadresse
+        let dest_ptr = allocated_phys_addr as *mut u8; // Das ist die Startadresse
         let content = ph.content().expect("Should have content");
         let file_size = ph.filesz() as usize;
         let mem_size = ph.memsz() as usize;
         let bss_size = mem_size - file_size;
 
+        println!("allocated phy addr: {:#x}", allocated_phys_addr);
+        assert!(!dest_ptr.is_null(), "Destination pointer is null!");
+        assert_eq!(dest_ptr.align_offset(core::mem::align_of::<u64>()), 0, "Destination not aligned");
+        assert!(content.len() >= file_size, "Source slice too short");
+
         println!("Writing to allocated address: {:#x}\r", dest_ptr as usize);
 
         unsafe {
+            println!(
+                "Copying {} bytes from {:p} to {:p}",
+                file_size,
+                content.as_ptr(),
+                dest_ptr
+            );
+
             // Dateiinhalt in den zugewiesenen Speicher kopieren
             core::ptr::copy_nonoverlapping(content.as_ptr(), dest_ptr, file_size);
 
@@ -318,22 +335,16 @@ for i in 0..num_entries {
         }
 
         println!("Successfully written to allocated address: {:#x}\r", dest_ptr as usize);
-
-  
-
-    
     
         uefi_println!(con_out, "Segment {} processed.", i);
     }
     
-    
-    
-    
+    uefi_println!(con_out, "Attempting to exit boot services with map_key: {:#x}", map_key);
+    uefi_println!(con_out, "Image Handle before exiting boot services: {:#x}", hn_pointer as *const _ as usize);
 
-
-    println!("Press any key to proceed to map memory...\r");
     let status = (boot_services.exit_boot_services)(hn_pointer, map_key);
     if status != Status::SUCCESS {
+        uefi_println!(con_out, "Exit boot services failed: {:?}", status);
         panic!("bootservice exit was not successfull!\r");
     }
     // Jump to kernel entry point
